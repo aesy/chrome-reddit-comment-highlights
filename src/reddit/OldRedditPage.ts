@@ -1,14 +1,20 @@
 import bind from "bind-decorator";
 import { Subscribable } from "event/Event";
 import { SyncEvent } from "event/SyncEvent";
-import { RedditComment, RedditCommentThread, RedditPage } from "reddit/RedditPage";
+import { isACommentThread, isMobileSite, RedditComment, RedditCommentThread, RedditPage } from "reddit/RedditPage";
+import { Logging } from "logger/Logging";
+import { RedesignRedditPage } from "reddit/RedesignRedditPage";
 import { findClosestParent } from "util/DOM";
+
+const logger = Logging.getLogger("OldRedditCommentPage");
 
 class OldRedditComment implements RedditComment {
     private readonly _onClick = new SyncEvent<void>();
 
     public constructor(
-        public readonly element: Element
+        public readonly element: Element,
+        // We need a reference to the thread to be able to fetch child comments...
+        private readonly thread: RedditCommentThread
     ) {
         element.addEventListener(
             "click",
@@ -58,10 +64,21 @@ class OldRedditComment implements RedditComment {
     }
 
     public getChildComments(): RedditComment[] {
-        return Array.from(
-            // Avoid use of :scope psuedo selector for compatibility reasons (firefox mobile)
-            this.element.querySelectorAll(`#thing_${ this.id } > .child > .listing > .comment`)
-        ).map((a): OldRedditComment => new OldRedditComment(a));
+        // Avoid use of :scope psuedo selector for compatibility reasons (firefox mobile)
+        const childElements = this.element.querySelectorAll(`#thing_${ this.id } > .child > .listing > .comment`);
+
+        return Array.from(childElements)
+            .map(element => {
+                const id = element.getAttribute("data-fullname");
+
+                if (!id) {
+                    return null;
+                }
+
+                return this.thread.getCommentById(id);
+            })
+            .filter(Boolean)
+            .map(comment => comment!);
     }
 
     public dispose(): void {
@@ -80,6 +97,7 @@ class OldRedditComment implements RedditComment {
         const comment = findClosestParent(target, ".comment");
 
         if (this.element === comment) {
+            logger.debug("Comment clicked", { id: this.id });
             this._onClick.dispatch();
         }
     }
@@ -88,6 +106,7 @@ class OldRedditComment implements RedditComment {
 class OldRedditCommentThread implements RedditCommentThread {
     private readonly _onCommentAdded = new SyncEvent<RedditComment>();
     private readonly onChangeObserver: MutationObserver;
+    private readonly comments: Map<string, RedditComment> = new Map();
 
     public constructor() {
         this.onChangeObserver = new MutationObserver(this.onChange);
@@ -107,39 +126,19 @@ class OldRedditCommentThread implements RedditCommentThread {
         return pathPieces[ 4 ];
     }
 
-    public isAtRootLevel(): boolean {
-        const pathPieces = document.location.pathname.split("/");
-
-        // Check so that url is in the form of '/r/<subreddit>/comments/...
-        const correctPathFormat = pathPieces[ 1 ] === "r" && pathPieces[ 3 ] === "comments";
-
-        if (!correctPathFormat) {
-            return false;
-        }
-
-        // Check so that url doesn't include direct link to comment
-        return pathPieces.length < 8;
-    }
-
-    public getCommentById(id: string): RedditComment {
-        throw "Not Implemented";
+    public getCommentById(id: string): RedditComment | null {
+        return this.comments.get(id) || null;
     }
 
     public getAllComments(): RedditComment[] {
-        const root: Element | null = document.querySelector(".sitetable.nestedlisting");
-
-        if (!root) {
-            return [];
-        }
-
-        const comments: Element[] = Array.from(root.getElementsByClassName("comment"));
-
-        return comments.map(element => new OldRedditComment(element));
+        return Array.from(this.comments.values());
     }
 
     public dispose(): void {
         this._onCommentAdded.dispose();
         this.onChangeObserver.disconnect();
+        this.comments.forEach(comment => comment.dispose());
+        this.comments.clear();
     }
 
     private initialize(): void {
@@ -148,6 +147,8 @@ class OldRedditCommentThread implements RedditCommentThread {
         if (!root) {
             return;
         }
+
+        logger.debug("Thread opened", { id: this.id });
 
         this.onChangeObserver.observe(root, {
             attributes: false,
@@ -166,11 +167,12 @@ class OldRedditCommentThread implements RedditCommentThread {
             this._onCommentAdded.dispatch(comment);
         };
 
-        const comments = this.getAllComments();
-
-        for (const comment of comments) {
-            notify(comment);
-        }
+        Array.from(root.getElementsByClassName("comment"))
+            .map(element => new OldRedditComment(element, this))
+            .forEach(comment => {
+                this.comments.set(comment.id, comment);
+                notify(comment);
+            });
     }
 
     @bind
@@ -190,7 +192,8 @@ class OldRedditCommentThread implements RedditCommentThread {
                 return element.classList.contains("comment");
             })
             .forEach((element: Element): void => {
-                const comment = new OldRedditComment(element);
+                const comment = new OldRedditComment(element, this);
+                this.comments.set(comment.id, comment);
 
                 this._onCommentAdded.dispatch(comment);
             });
@@ -199,10 +202,14 @@ class OldRedditCommentThread implements RedditCommentThread {
 
 export class OldRedditPage implements RedditPage {
     private readonly _onThreadOpened = new SyncEvent<RedditCommentThread>();
-    private initialized: boolean = false;
+    private commentThread: RedditCommentThread | null = null;
+
+    public constructor() {
+        this.initialize();
+    }
 
     public get onThreadOpened(): Subscribable<RedditCommentThread> {
-        if (!OldRedditPage.isACommentThread()) {
+        if (!isACommentThread()) {
             return this._onThreadOpened;
         }
 
@@ -213,11 +220,10 @@ export class OldRedditPage implements RedditPage {
                 return self._onThreadOpened.listener();
             },
             once(listener: <T>(data: RedditCommentThread) => void): Subscribable<RedditCommentThread> {
-                self._onThreadOpened.subscribe(listener);
+                self._onThreadOpened.once(listener);
 
-                if (!self.initialized) {
-                    self.initialize();
-                    self.initialized = true;
+                if (self.commentThread) {
+                    listener(self.commentThread);
                 }
 
                 return this;
@@ -225,9 +231,8 @@ export class OldRedditPage implements RedditPage {
             subscribe(listener: <T>(data: RedditCommentThread) => void): Subscribable<RedditCommentThread> {
                 self._onThreadOpened.subscribe(listener);
 
-                if (!self.initialized) {
-                    self.initialize();
-                    self.initialized = true;
+                if (self.commentThread) {
+                    listener(self.commentThread);
                 }
 
                 return this;
@@ -263,26 +268,19 @@ export class OldRedditPage implements RedditPage {
 
     public dispose(): void {
         this._onThreadOpened.dispose();
+
+        if (this.commentThread) {
+            this.commentThread.dispose();
+        }
     }
 
     public static isSupported(): boolean {
-        return !OldRedditPage.isMobileSite();
-    }
-
-    private static isMobileSite(): boolean {
-        return document.location.hostname === "m.reddit.com";
-    }
-
-    private static isACommentThread(): boolean {
-        const pathPieces = document.location.pathname.split("/");
-
-        // Check if url is in the form of '/r/<subreddit>/comments/...'
-        return pathPieces[ 1 ] === "r" && pathPieces[ 3 ] === "comments";
+        return !RedesignRedditPage.isSupported() && !isMobileSite();
     }
 
     private initialize(): void {
-        const commentThread = new OldRedditCommentThread();
+        this.commentThread = new OldRedditCommentThread();
 
-        this._onThreadOpened.dispatch(commentThread);
+        this._onThreadOpened.dispatch(this.commentThread);
     }
 }

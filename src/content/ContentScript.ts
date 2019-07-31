@@ -12,7 +12,9 @@ import { Options } from "options/ExtensionOptions";
 import { OldRedditCommentHighlighter } from "reddit/OldRedditCommentHighlighter";
 import { OldRedditPage } from "reddit/OldRedditPage";
 import { HighlighterOptions, RedditCommentHighlighter } from "reddit/RedditCommentHighlighter";
-import { RedditComment, RedditCommentThread, RedditPage } from "reddit/RedditPage";
+import { isAtRootLevel, RedditComment, RedditCommentThread, RedditPage } from "reddit/RedditPage";
+import { RedesignRedditCommentHighlighter } from "reddit/RedesignRedditCommentHighlighter";
+import { RedesignRedditPage } from "reddit/RedesignRedditPage";
 
 Logging.setLoggerFactory(KeyValueLogger.create);
 Logging.setSink(new ConsoleSink());
@@ -22,6 +24,7 @@ const logger = Logging.getLogger("ContentScript");
 
 class ContentScript {
     private currentThread: RedditCommentThread | null = null;
+    private lastVisitedTimestamp: number | null | undefined = undefined;
 
     private constructor(
         private readonly reddit: RedditPage,
@@ -39,6 +42,7 @@ class ContentScript {
             logger.info("Enabling debug mode");
             Logging.setLogLevel(LogLevel.DEBUG);
         } else {
+            logger.info("Disabling debug mode");
             Logging.setLogLevel(LogLevel.WARN);
         }
 
@@ -61,7 +65,11 @@ class ContentScript {
             transitionDurationSeconds: Constants.CSS_TRANSITION_DURATION_SECONDS
         };
 
-        if (OldRedditPage.isSupported()) {
+        if (RedesignRedditPage.isSupported()) {
+            logger.info("Detected redesign reddit page");
+            reddit = new RedesignRedditPage(Constants.REDESIGN_EXTENSION_NAME);
+            highlighter = new RedesignRedditCommentHighlighter(highlightOptions);
+        } else if (OldRedditPage.isSupported()) {
             logger.info("Detected old reddit page");
             reddit = new OldRedditPage();
             highlighter = new OldRedditCommentHighlighter(highlightOptions);
@@ -112,6 +120,8 @@ class ContentScript {
     private async onThreadVisited(thread: RedditCommentThread): Promise<void> {
         logger.info("Thread visited", { threadId: thread.id });
 
+        this.lastVisitedTimestamp = undefined;
+
         if (this.currentThread) {
             logger.debug("Disposing previous thread", { threadId: this.currentThread.id });
             this.currentThread.dispose();
@@ -119,7 +129,7 @@ class ContentScript {
 
         this.currentThread = thread;
 
-        if (thread.isAtRootLevel()) {
+        if (isAtRootLevel()) {
             // Only consider comment section viewed if at root level
             onThreadVisitedEvent.dispatch(thread.id);
         }
@@ -135,15 +145,36 @@ class ContentScript {
             return;
         }
 
-        const entry = await extensionFunctionRegistry.invoke<string, ThreadHistoryEntry | null>(
-            Actions.GET_THREAD_BY_ID, this.currentThread.id);
+        if (this.lastVisitedTimestamp === undefined) {
+            logger.debug("Fetching thread history entry", {
+                thread: this.currentThread.id
+            });
 
-        if (!entry) {
-            // First time in comment section, no highlights
+            const entry = await extensionFunctionRegistry.invoke<string, ThreadHistoryEntry | null>(
+                Actions.GET_THREAD_BY_ID, this.currentThread.id);
+
+            if (entry) {
+                // Caching lastVisitedTimestamp so that we don't have to do a lot of unnecessary
+                // inter-script communcation.
+                this.lastVisitedTimestamp = entry.timestamp * 1000;
+
+                logger.debug("Thread history entry found", {
+                    thread: this.currentThread.id,
+                    lastVisited: new Date(this.lastVisitedTimestamp).toISOString()
+                });
+            } else {
+                this.lastVisitedTimestamp = null;
+
+                logger.debug("No thread history entry exists, meaning thread visited for the first time.", {
+                    thread: this.currentThread.id
+                });
+            }
+        }
+
+        if (this.lastVisitedTimestamp === null) {
             return;
         }
 
-        const timestamp = entry.timestamp * 1000;
         const user = this.reddit.getLoggedInUser();
 
         for (const comment of comments) {
@@ -157,10 +188,15 @@ class ContentScript {
                 continue;
             }
 
-            if (comment.time.valueOf() < timestamp) {
+            if (comment.time.valueOf() < this.lastVisitedTimestamp) {
                 // Comment already seen, skip
                 continue;
             }
+
+            logger.debug("Highlighting comment", {
+                id: comment.id || "null",
+                created: comment.time.toISOString()
+            });
 
             this.highlighter.highlightComment(comment);
         }

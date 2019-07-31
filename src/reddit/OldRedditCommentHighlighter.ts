@@ -1,70 +1,41 @@
-import { HighlighterOptions, RedditCommentHighlighter } from "reddit/RedditCommentHighlighter";
-import { RedditComment } from "reddit/RedditPage";
+import { AbstractRedditCommentHighlighter } from "reddit/AbstractRedditCommentHighlighter";
+import { Logging } from "logger/Logging";
 import { injectCSS } from "util/DOM";
-import { wait } from "util/Time";
 
-export class OldRedditCommentHighlighter implements RedditCommentHighlighter {
-    private readonly cssElement: Element;
+const logger = Logging.getLogger("OldRedditCommentHighlighter");
 
-    public constructor(
-        private readonly options: HighlighterOptions
-    ) {
+export class OldRedditCommentHighlighter extends AbstractRedditCommentHighlighter {
+    private cssElement: Element | null = null;
+
+    protected addCss() {
+        logger.info("Injecting CSS");
         this.cssElement = injectCSS(this.getCSS(), document.head);
+        logger.info("Successfully injected CSS")
     }
 
-    public highlightComment(comment: RedditComment): void {
-        comment.element.classList.add(this.options.className);
-        comment.element.classList.add(`${ this.options.className }--transition`);
+    protected removeCss() {
+        logger.info("Removing CSS");
 
-        if (!this.options.clearOnClick) {
-            return;
+        let removed: boolean = false;
+
+        if (this.cssElement) {
+            const element = document.head.removeChild(this.cssElement);
+            removed = Boolean(element);
         }
 
-        // Comments to clear on click
-        const clear: RedditComment[] = [];
-
-        if (this.options.includeChildren) {
-            const addComment = (comment: RedditComment): void => {
-                const comments = comment.getChildComments();
-
-                for (const comment of comments) {
-                    addComment(comment);
-                }
-
-                clear.push(comment);
-            };
-
-            addComment(comment);
+        if (removed) {
+            logger.info("Successfully removed CSS");
         } else {
-            clear.push(comment);
-        }
-
-        comment.onClick.once(async () => {
-            for (const comment of clear) {
-                comment.element.classList.remove(this.options.className);
-            }
-
-            await wait(this.options.transitionDurationSeconds * 1000 + 500);
-
-            // Transition class can't be removed before transition has finished
-            for (const comment of clear) {
-                const className = `${ this.options.className }--transition`;
-                comment.element.classList.remove(className);
-            }
-        });
-    }
-
-    public dispose(): void {
-        document.head.removeChild(this.cssElement);
-
-        for (const element of document.querySelectorAll(".comment")) {
-            element.classList.remove(this.options.className);
-            element.classList.remove(`${ this.options.className }--transition`);
+            logger.warn("No CSS was removed");
         }
     }
 
     private getCSS(): string {
+        logger.debug("Generating CSS");
+
         if (this.options.customCSS) {
+            logger.debug("Using custom CSS");
+
             return this.options.customCSS;
         }
 
@@ -86,15 +57,15 @@ export class OldRedditCommentHighlighter implements RedditCommentHighlighter {
         if (this.options.linkTextColor) {
             css += `
                 .comment.${ this.options.className } > .entry .md a {
-                    color: ${ this.options.linkTextColor }
+                    color: ${ this.options.linkTextColor };
                 }
             `;
         }
 
-        if (this.options.quoteTextColor !== null) {
+        if (this.options.quoteTextColor) {
             css += `
                 .comment.${ this.options.className } > .entry .md blockquote {
-                    color: ${ this.options.quoteTextColor }
+                    color: ${ this.options.quoteTextColor };
                 }
             `;
         }
@@ -105,14 +76,14 @@ export class OldRedditCommentHighlighter implements RedditCommentHighlighter {
                 border: ${ this.options.border || "0" };
                 border-radius: 2px;
                 background-color: ${ this.options.backgroundColorDark };
-                color: ${ this.options.normalTextColorDark }
+                color: ${ this.options.normalTextColorDark };
             }
         `;
 
         if (this.options.linkTextColorDark) {
             css += `
                 .res-nightmode .comment.${ this.options.className } > .entry .md a {
-                    color: ${ this.options.linkTextColorDark }
+                    color: ${ this.options.linkTextColorDark };
                 }
             `;
         }
@@ -120,10 +91,12 @@ export class OldRedditCommentHighlighter implements RedditCommentHighlighter {
         if (this.options.quoteTextColorDark) {
             css += `
                 .res-nightmode .comment.${ this.options.className } > .entry .md blockquote {
-                    color: ${ this.options.quoteTextColorDark }
+                    color: ${ this.options.quoteTextColorDark };
                 }
             `;
         }
+
+        logger.debug("Successfully generated CSS");
 
         return css;
     }
