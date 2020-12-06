@@ -1,4 +1,5 @@
 import bind from "bind-decorator";
+import { browser } from "webextension-polyfill-ts";
 import { Actions } from "common/Actions";
 import { Constants } from "common/Constants";
 import { onSettingsChanged, onThreadVisitedEvent } from "common/Events";
@@ -16,15 +17,12 @@ import { CachedStorage } from "storage/CachedStorage";
 import { CompressedStorage } from "storage/CompressedStorage";
 import { Storage } from "storage/Storage";
 import { StorageMigrator } from "storage/StorageMigrator";
-import { getBrowser } from "util/WebExtensions";
-import { StorageType } from "typings/Browser";
 
 Logging.setLoggerFactory(KeyValueLogger.create);
 Logging.setSink(new ConsoleSink());
 Logging.setLogLevel(LogLevel.DEBUG);
 
 const logger = Logging.getLogger("BackgroundScript");
-const browser = getBrowser();
 
 class BackgroundScript {
     private constructor(
@@ -62,7 +60,7 @@ class BackgroundScript {
         }
 
         let threadStorage: Storage<ThreadHistoryEntry[]>;
-        let storageType: StorageType;
+        let storageType: "sync" | "local";
 
         if (options.sync) {
             logger.debug("Using sync thread storage");

@@ -1,6 +1,6 @@
 import bind from "bind-decorator";
+import { Browser } from "webextension-polyfill-ts";
 import { FunctionRegistry } from "registry/FunctionRegistry";
-import { Browser, MessageSender } from "typings/Browser";
 
 interface InvocationRequest<T> {
     method: string;
@@ -98,14 +98,9 @@ export class RemoteFunctionBrowserExtensionRegistry implements FunctionRegistry 
     }
 
     @bind
-    private messageListener(
-        request: object | void,
-        sender: MessageSender,
-        sendResponse: (response: object) => Promise<void>
-    ): boolean {
-
+    private messageListener(request: object | void): Promise<InvocationResponse<unknown>> | void {
         if (!request) {
-            return false;
+            return;
         }
 
         const invocationRequest = request as InvocationRequest<unknown>;
@@ -114,12 +109,12 @@ export class RemoteFunctionBrowserExtensionRegistry implements FunctionRegistry 
         const prefix = RemoteFunctionBrowserExtensionRegistry.METHOD_PREFIX;
 
         if (typeof method !== "string") {
-            return false;
+            return;
         }
 
         if (!method.startsWith(prefix)) {
             // Message is not related to extension registry
-            return false;
+            return;
         }
 
         const func = this.functions.get(method);
@@ -130,15 +125,13 @@ export class RemoteFunctionBrowserExtensionRegistry implements FunctionRegistry 
                 const result = func(arg);
 
                 if (result instanceof Promise) {
-                    result.then((actualResult: unknown) => {
+                    return result.then((actualResult: unknown) => {
                         response[ "result" ] = actualResult;
-                        sendResponse(response);
+                        return response;
                     }).catch((error: any) => {
                         response[ "error" ] = error;
-                        sendResponse(response);
+                        return response;
                     });
-
-                    return true;
                 } else {
                     response[ "result" ] = result;
                 }
@@ -151,8 +144,6 @@ export class RemoteFunctionBrowserExtensionRegistry implements FunctionRegistry 
             response[ "error" ] = `No such function with name ${ name }`;
         }
 
-        sendResponse(response);
-
-        return false;
+        return Promise.resolve(response);
     }
 }

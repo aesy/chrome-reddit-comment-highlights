@@ -1,9 +1,11 @@
 import bind from "bind-decorator";
+import { Browser, Storage as BrowserStorage } from "webextension-polyfill-ts";
 import { AsyncEvent } from "event/AsyncEvent";
 import { Subscribable } from "event/Event";
 import { Storage } from "storage/Storage";
 import { Logging } from "logger/Logging";
-import { Browser, StorageArea, StorageType, Changes } from "typings/Browser";
+
+type Changes = { [p: string]: BrowserStorage.StorageChange };
 
 const logger = Logging.getLogger("BrowserExtensionStorage");
 
@@ -12,7 +14,7 @@ export class BrowserExtensionStorage<T> implements Storage<T> {
 
     public constructor(
         private readonly browser: Browser,
-        private readonly type: StorageType,
+        private readonly type: "sync" | "local",
         private readonly key: string
     ) {
         this.browser.storage.onChanged.addListener(this.changeListener);
@@ -78,12 +80,17 @@ export class BrowserExtensionStorage<T> implements Storage<T> {
         this.browser.storage.onChanged.removeListener(this.changeListener);
     }
 
-    protected get storageArea(): StorageArea {
-        return this.browser.storage[ this.type ];
+    protected get storageArea(): BrowserStorage.StorageArea {
+        switch (this.type) {
+            case "sync":
+                return this.browser.storage.sync;
+            case "local":
+                return this.browser.storage.local;
+        }
     }
 
     @bind
-    private changeListener(changes: Changes, storageType: StorageType): void {
+    private changeListener(changes: Changes, storageType: string): void {
         if (this.type !== storageType) {
             logger.debug("Underlying storage changed, except in wrong storage type",
                 { thisType: this.type, changedType: storageType });
@@ -108,7 +115,7 @@ export class PeriodicallyFlushedBrowserExtensionStorage<T> extends BrowserExtens
     private readonly timeout: number;
     private unflushed: T | null = null;
 
-    public constructor(browser: Browser, type: StorageType, key: string, intervalSeconds: number) {
+    public constructor(browser: Browser, type: "sync" | "local", key: string, intervalSeconds: number) {
         super(browser, type, key);
 
         this.timeout = window.setInterval(this.flush, intervalSeconds * 1000);

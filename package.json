@@ -15,7 +15,8 @@
     "dependencies": {
         "bind-decorator": "^1.0.11",
         "lz-string": "^1.4.4",
-        "normalize.css": "^8.0.1"
+        "normalize.css": "^8.0.1",
+        "webextension-polyfill-ts": "^0.22.0"
     },
     "devDependencies": {
         "@babel/core": "^7.4.5",
@@ -34,7 +35,7 @@
         "autoprefixer": "^9.6.0",
         "babel-loader": "^8.0.6",
         "babel-plugin-transform-async-to-promises": "^0.8.13",
-        "canvas": "^2.5.0",
+        "canvas": "^2.6.1",
         "chai": "^4.2.0",
         "codecov": "^3.5.0",
         "copy-webpack-plugin": "^5.0.3",
